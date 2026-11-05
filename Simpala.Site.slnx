@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Simpala.Site.Api/Simpala.Site.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Simpala.Site.Api.Tests/Simpala.Site.Api.Tests.csproj" />
+  </Folder>
+</Solution>

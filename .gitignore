@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/App_Data/
+.vs/
+TestResults/
+artifacts/
+*.user
+*.pfx
+*.p12
+*.pem
+*.key
+appsettings.*.local.json
