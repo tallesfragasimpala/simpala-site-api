@@ -1,151 +1,128 @@
-# SIMPALA — Fale Conosco API
+# SIMPALA — API Fale Conosco
 
-API independente dos sites e do SimDesk, em ASP.NET Core / .NET 10.
+ASP.NET Core / .NET 10. Mesma aplicação e ambiente Production no computador e no IIS.
+Os sites continuam estáticos e separados. Fluxo: formulário → API → Microsoft Graph
+→ caixa de Fale Conosco → SimDesk. Não há serviço Windows adicional para esta API.
 
-## Estado desta entrega
+## Rodar localmente
 
-**Somente simulação local. Nenhum e-mail é transmitido.**
-
-Implementados: controllers, validação no servidor, CPF/CNPJ numérico e alfanumérico,
-protocolo persistente, idempotência transacional, desafio assinado de uso único,
-limitação por IP, geração do texto e testes HTTP reais contra Kestrel.
-
-O banco guarda apenas empresa, chave de idempotência, hash do conteúdo, protocolo,
-data e estado. Nome, CPF/CNPJ, e-mail, telefone, mensagem e corpo gerado não são
-persistidos. O hash continua sendo informação pseudonimizada e deve ter acesso restrito.
-
-Não implementados nesta etapa: transporte Graph, fila de envio, transições de entrega,
-reconciliação com Exchange, integração dos sites e ativação pública. Os estados
-`Pending`, `Sending`, `Sent`, `Failed` e `Unknown` estão definidos, mas as simulações
-permanecem `Pending` e são marcadas `Simulation=1`. Não devem ser enviadas futuramente.
-
-Configurar `EmailSettings:EnableSending=true` causa falha de inicialização.
-Os endpoints de contato só respondem a conexões de loopback em Development/HML.
-Em Production não coletam solicitações. O `/health` informa explicitamente modo de simulação.
-
-## Executar
-
-Requisito: SDK .NET 10.
+Na pasta da API:
 
 ```powershell
-dotnet restore Simpala.Site.slnx
-dotnet build Simpala.Site.slnx
-dotnet run --project src/Simpala.Site.Api --launch-profile http
+powershell -NoProfile -File scripts/Start-Local.ps1
 ```
 
-API local: `http://localhost:5099`. HTTP é permitido somente em loopback/Development.
-Para HTTPS local, configure o certificado de desenvolvimento confiável e use
-`--launch-profile https` em `https://localhost:7099`.
+O script solicita o segredo com entrada oculta, valida autenticação Microsoft sem
+enviar e-mails e inicia a API em https://localhost:7099, ambiente Production.
+Enviar o formulário envia e-mail real. O acesso continua restrito ao computador local.
+Credenciais não são gravadas. Variáveis do processo são restauradas ao encerrar.
+Requisito: SDK .NET 10 e certificado HTTPS de desenvolvimento confiável.
 
-Não há Swagger nem interface pública de consulta aos dados. Os sites existentes
-não foram alterados nem conectados a esta API.
-
-## Testar
+Em outro terminal, disponibilizar os sites (ajustar o caminho se necessário):
 
 ```powershell
-dotnet run --project tests/Simpala.Site.Api.Tests
+python -m http.server 8000 --bind 127.0.0.1 --directory "C:\Users\talles.fraga\projects\Sites"
 ```
 
-O executor usa apenas a biblioteca padrão, inicia instâncias isoladas da API e
-bancos temporários. Retorna código de falha se qualquer verificação falhar.
-Não exige credenciais, certificado do Entra nem serviços de e-mail.
+Abrir http://127.0.0.1:8000/simpala-financeira/ ou /simpala-consorcios/.
+Os domínios públicos dos sites permanecem sem endereço de API até a configuração com a infra.
 
-Para gerar uma prévia manual:
+Não existe seleção HML/PRD para o envio da API. Se o SimDesk estiver em TestMode,
+o usuário digita [TESTE HML] no início da Mensagem; nenhuma tag é adicionada pela API.
+Os dados antigos de App_Data/HML são preservados e não são enviados ou migrados
+automaticamente. A execução local usa App_Data/Local, separada do diretório definitivo
+que será configurado no servidor. Recibos locais antigos não são reutilizados pelo site.
+
+## Configuração para IIS
+
+```text
+ASPNETCORE_ENVIRONMENT=Production
+EmailSettings__EnableSending=true
+Contact__EnablePublicAccess=true
+Contact__DataDirectory=D:\Simpala\Dados\SiteApi
+Contact__AllowedOrigins__0=https://DOMINIO-REAL-FINANCEIRA
+Contact__AllowedOrigins__1=https://DOMINIO-REAL-CONSORCIOS
+AllowedHosts=DOMINIO-REAL-DA-API
+SupportMail__TenantId=...
+SupportMail__ClientId=...
+SupportMail__ClientSecret=...
+```
+
+O appsettings.json é a única base: envio e acesso externo vêm desabilitados para
+evitar ativação acidental. No IIS, as configurações são provisionadas no servidor.
+O script local habilita envio, limita CORS às origens locais da porta 8000 e mantém
+acesso público bloqueado. Autenticar confirma credenciais, não permissão de envio.
+
+Nos contact-config.js dos sites, configurar a URL HTTPS definitiva e allowSending:true.
+Nunca colocar credenciais Microsoft nos sites. [Instruções de infraestrutura](docs/iis.md).
+
+## Publicar
 
 ```powershell
-powershell -File scripts/Test-Local.ps1
+dotnet publish src/Simpala.Site.Api -c Release -o artifacts/publish
 ```
 
-## Contrato local
+Entregar somente artifacts/publish à infraestrutura. Não entregar código-fonte,
+tests, scripts, App_Data ou credenciais. O SDK Web gera web.config para IIS.
+A publicação usa o mesmo código testado localmente. Mudam endereços, credenciais,
+diretório persistente e liberação de acesso externo.
 
-1. `GET /api/contact/challenge` retorna `token`, `question`, `expiresAt`.
-2. `POST /api/contact/financeira` ou `/api/contact/consorcio` recebe JSON e
-   o cabeçalho `Idempotency-Key` com um UUID no formato `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
-
-```json
-{
-  "name": "Cliente Exemplo",
-  "email": "cliente@exemplo.com",
-  "document": "529.982.247-25",
-  "phone": "(51) 99999-9999",
-  "message": "Preciso de atendimento.",
-  "contactPreference": "",
-  "challengeToken": "TOKEN_DO_DESAFIO",
-  "challengeAnswer": "RESPOSTA",
-  "website": ""
-}
-```
-
-Nome: 2–150 caracteres; e-mail: até 254; documento: até 18; telefone: até 20;
-mensagem: até 1.000. O campo `website` é uma armadilha e deve ficar vazio.
-Propriedades desconhecidas são rejeitadas, inclusive endereços arbitrários de destino.
-`contactPreference` é opcional e ignorada; nenhum aceite é inferido.
-
-Resposta `200`: protocolo, `state: Pending`, `simulation: true`, aviso explícito e
-`preview` com remetente, destinatário, assunto e corpo. Não significa entrega nem chamado criado.
-Validação/desafio inválido: `400`; conteúdo diferente na mesma chave: `409`;
-limite de corpo: `413`; limite por IP: `429`; serviço público indisponível: `503` em HTTPS.
-
-Mesma empresa/chave e mesmos dados normalizados reutilizam protocolo e data,
-inclusive após reiniciar. Mesma chave com conteúdo diferente retorna conflito.
-Uma nova chave requer um novo desafio. Repetições idempotentes não precisam de
-um desafio ainda válido, mas devem manter os campos obrigatórios do contrato.
-
-São permitidas 10 chamadas por IP/minuto, incluindo a obtenção de desafios.
-O desafio de soma é uma proteção inicial, **não uma proteção suficiente contra bots
-sofisticados**. A estratégia de produção será definida antes da exposição pública.
-
-## E-mail e pendências do parser
-
-- Caixas mapeadas no servidor; remetente e destinatário iguais.
-- Corpo em texto puro; prévia declara UTF-8 e usa CRLF.
-- Data persistida em UTC e formatada em America/Sao_Paulo.
-- Rótulo `CPF:` preservado também para CNPJ.
-- `Aceito receber contato por:` e `Política de Privacidade:` ficam vazios.
-- Mensagem é convertida para uma linha, para não permitir criação de campos falsos do parser.
-- Ambiente HML acrescenta `[TESTE HML]` ao início do campo Mensagem.
-
-O assunto, os rótulos com valores vazios, os prefixos de protocolo, as quebras de
-linha e o CNPJ alfanumérico ainda exigem homologação com o SimDesk.
-Nenhuma representação recebida no Exchange é presumida correta sem conferência.
-
-## Configuração e dados
-
-`appsettings.{Development,HML,Production}.json` mantêm envio desabilitado.
-`Contact:DataDirectory` aceita um caminho absoluto para o banco e as chaves de proteção;
-o padrão é `App_Data`, fora de qualquer pasta pública. Nunca publique essa pasta como conteúdo estático.
-No Windows, as chaves dos desafios são protegidas com DPAPI para a identidade do processo.
-Restrinja o diretório por ACL; em outros sistemas, proteja as chaves no armazenamento do servidor.
-
-`Contact:RetentionDays` tem padrão de **30 dias somente para demonstração local**,
-com limpeza na inicialização e a cada seis horas. O responsável da empresa deve
-aprovar a política de retenção e backups antes de produção. Após expirar a retenção,
-a mesma chave poderá gerar outro protocolo: a janela deve cobrir as retentativas permitidas.
-
-CORS não autoriza nenhuma origem por padrão. Se necessário, configure
-`Contact:AllowedOrigins` com origens HTTPS exatas. CORS não substitui proteção antispam.
-Não confie em `X-Forwarded-For` arbitrário; na implantação, configure somente proxies conhecidos.
-
-## Próxima etapa
-
-Reutilizar o aplicativo existente do SimDesk no Entra, conferir sua autenticacao e
-`Application Mail.Send` via RBAC restrito às duas caixas. Depois implementar o transporte,
-persistência segura do conteúdo de envio, concorrência de despacho e reconciliação
-para `Sending`/`Unknown`. Um `202` do Graph será registrado como aceitação, não confirmação de entrega.
-
-Nenhum envio real, inclusive HML, está autorizado nesta entrega.
-Consulte [homologação](docs/homologacao.md) e [IIS](docs/iis.md).
-
-## Teste de autenticacao no Entra (sem envio)
-
-TenantId e ClientId estao configurados em `SupportMail` no appsettings.json.
-O script abaixo solicita o valor do client secret de forma oculta e o utiliza
-somente nesta execucao. Nao grava o segredo, nao imprime o token e nao envia e-mails.
+## Testes
 
 ```powershell
-powershell -NoProfile -File scripts/Test-GraphAuthentication.ps1
+dotnet run --project tests/Simpala.Site.Api.Tests -c Release
 ```
 
-Resultado esperado: `Autenticacao no Entra: OK`. Esse resultado confirma apenas
-obtencao do token; as permissoes e o escopo das caixas exigem verificacao separada.
-A autenticacao deste script ainda nao esta ligada ao transporte da API.
+Os testes permanecem como ferramenta de desenvolvimento, fora do pacote da API.
+Usam dados fictícios, bancos temporários e HTTP Microsoft interceptado, sem enviar e-mails.
+Simulação existe somente para desenvolvimento/testes; não é outro fluxo operacional.
+
+## Contrato e proteção contra duplicidade
+
+- GET /health: processo disponível e modo; não prova entrega ou permissão Microsoft.
+- GET /api/contact/challenge: pergunta, token protegido e validade.
+- POST /api/contact/financeira ou /api/contact/consorcio: JSON e Idempotency-Key UUID.
+- GET /api/contact/{company}/status: UUID no cabeçalho, somente estado e recibo.
+- X-Contact-Mode impede que um cliente de simulação acione envio real.
+
+Campos: name (2–150), email (254), document (18), phone (20), message (1000),
+challengeToken, challengeAnswer, website (honeypot vazio). ContactPreference opcional
+é ignorada. Propriedades desconhecidas são rejeitadas. CPF numérico e CNPJ numérico
+ou alfanumérico são validados. Corpo limitado a 16 KiB; HTTPS obrigatório.
+
+O estado é persistido antes de enviar: Pending → Sending → Accepted / Failed / Unknown.
+Somente um processamento pode iniciar o envio. Alterar um Pending ainda não enviado
+consome novo desafio e invalida o claim do conteúdo antigo. O navegador recupera
+o resultado automaticamente, sem reenviar em segundo plano. Após envio confirmado,
+uma nova ação explícita cria outra solicitação, mesmo com conteúdo igual.
+Unknown nunca é reenviado automaticamente; exige conferência por protocolo no Exchange/SimDesk.
+Graph 202 indica aceitação, sem provar entrega ou criação do chamado.
+
+Assunto: Entre em contato. Texto puro UTF-8/CRLF; data America/Sao_Paulo.
+Mesmo remetente e destinatário, fixos no servidor por empresa. Documento em CPF:
+inclusive para CNPJ. Preferência/política não aparecem no e-mail. Registro fica no
+corpo para rastreamento, sem aparecer nas mensagens do site. Mensagem normalizada
+para uma linha impede injeção de campos no parser.
+
+SQLite guarda recibos, hashes e estados, sem nome, documento, e-mail, telefone,
+mensagem, segredo ou token. As chaves dos desafios usam DPAPI no Windows.
+Retenção padrão: 30 dias; limpeza a cada seis horas. Sending/Unknown exigem resolução
+administrativa e ficam fora da exclusão automática. A janela de idempotência depende
+da retenção. Banco/chaves precisam de ACL e backup. A mesma instância SQLite deve
+ser local ao servidor, sem compartilhamento ou múltiplos workers.
+
+Antes de expor ao público: homologar o chamado, autorização Microsoft restrita às
+duas caixas, antispam, retenção/backups e IP/HTTPS no IIS. Soma e honeypot são apenas
+proteções básicas. Nenhum deploy, envio ou mudança no SimDesk é feito pela publicação.
+
+
+## Entrega para infraestrutura
+
+Scripts de configuração e instruções detalhadas em deploy/LEIAME-INFRA.md.
+Gerar pacote com: powershell -NoProfile -File scripts/Build-Delivery.ps1.
+Os domínios oficiais foram confirmados; a origem da API e pastas ainda dependem da infra.
+O pacote gerado mantém o frontend público sem envio até Configure-Websites.ps1 ser executado.
+Configure-Server.ps1 permite informar o segredo no servidor, criptografado por Data Protection
+com DPAPI LocalMachine e ACL. A API aceita SupportMail:ClientSecretFile (caminho absoluto),
+alternativo ao ClientSecret; não configurar as duas fontes simultaneamente.
+Localmente Start-Local.ps1 continua solicitando o segredo em memória, sem alterar o fluxo.

@@ -10,3 +10,5 @@ artifacts/
 *.pem
 *.key
 appsettings.*.local.json
+
+*.protected

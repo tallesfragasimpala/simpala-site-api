@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace Simpala.Site.Api.DTOs;
 
@@ -27,4 +28,4 @@ public sealed class ContactRequest
 
 public sealed record NormalizedContact(string Name, string Email, string Document, string Phone, string Message);
 public sealed record EmailPreview(string From, string To, string Subject, string ContentType, string Encoding, string Body);
-public sealed record ContactResponse(string Registration, string State, bool Simulation, string Message, EmailPreview Preview);
+public sealed record ContactResponse(string Registration, string State, bool Simulation, string Message, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] EmailPreview? Preview);

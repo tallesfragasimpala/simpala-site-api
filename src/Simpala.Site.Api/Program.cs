@@ -2,7 +2,6 @@ using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using Simpala.Site.Api.Configuration;
@@ -15,6 +14,12 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--configure-mail-secret")
+        {
+            try { Environment.ExitCode = MailSecretFile.ConfigureInteractive(args[1]); }
+            catch { Console.Error.WriteLine("Não foi possível configurar o segredo. Confira o caminho, permissões e se o arquivo já existe."); Environment.ExitCode = 1; }
+            return;
+        }
         await using var app = BuildApp(args);
         await app.RunAsync();
     }
@@ -27,8 +32,31 @@ public static class Program
             ApplicationName = typeof(Program).Assembly.FullName
         });
         configure?.Invoke(builder);
-        if (builder.Configuration.GetValue<bool>("EmailSettings:EnableSending"))
-            throw new InvalidOperationException("Esta entrega suporta somente simulação. O transporte Graph ainda não está habilitado.");
+        var sending = builder.Configuration.GetValue<bool>("EmailSettings:EnableSending");
+        if (sending && !builder.Environment.IsProduction())
+            throw new InvalidOperationException("Envio real permitido somente em Production.");
+        // Public activation is separate from transport activation: production anti-abuse review is still required.
+        var publicAccess = builder.Configuration.GetValue<bool>("Contact:EnablePublicAccess");
+        if (publicAccess && (!sending || !builder.Environment.IsProduction()))
+            throw new InvalidOperationException("Acesso público exige envio habilitado em Production.");
+        builder.Services.Configure<MailOptions>(builder.Configuration.GetSection("EmailSettings"));
+        builder.Services.AddOptions<SupportMailOptions>().Bind(builder.Configuration.GetSection("SupportMail"))
+            .PostConfigure(value =>
+            {
+                if (value.ClientSecretFile.Length > 0)
+                {
+                    if (value.ClientSecret.Length > 0) throw new InvalidOperationException("Configure somente uma fonte de segredo.");
+                    value.ClientSecret = MailSecretFile.Load(value.ClientSecretFile);
+                }
+            })
+            .Validate(value => !sending || (Guid.TryParse(value.TenantId, out _) && Guid.TryParse(value.ClientId, out _)
+                && !string.IsNullOrWhiteSpace(value.ClientSecret)), "Configure as credenciais do serviço de e-mail.")
+            .ValidateOnStart();
+        foreach (var name in new[] { "Entra", "Graph" })
+            builder.Services.AddHttpClient(name, client => { client.Timeout = TimeSpan.FromSeconds(30); })
+                .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
+                .RemoveAllLoggers();
+        builder.Services.AddSingleton<GraphMailClient>();
 
         builder.Services.AddOptions<ContactOptions>().Bind(builder.Configuration.GetSection("Contact"))
             .Validate(options => options.RetentionDays is >= 1 and <= 3650, "Defina uma retenção entre 1 e 3650 dias.")
@@ -52,13 +80,12 @@ public static class Program
             options.JsonSerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
         });
         builder.Services.AddProblemDetails();
-        builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = 16_384);
         builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 16_384);
         builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
         {
             var origins = builder.Configuration.GetSection("Contact:AllowedOrigins").Get<string[]>() ?? [];
             if (origins.Length > 0)
-                policy.WithOrigins(origins).WithMethods("GET", "POST").WithHeaders("Content-Type", "Idempotency-Key");
+                policy.WithOrigins(origins).WithMethods("GET", "POST").WithHeaders("Content-Type", "Idempotency-Key", "X-Contact-Mode");
             else policy.SetIsOriginAllowed(_ => false);
         }));
         builder.Services.AddRateLimiter(options =>
@@ -71,6 +98,10 @@ public static class Program
                     PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
                     AutoReplenishment = true
                 }));
+            options.AddPolicy("contact-status", context => RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true }));
             options.OnRejected = async (context, cancellation) =>
             {
                 context.HttpContext.Response.Headers.RetryAfter = "60";
@@ -105,8 +136,8 @@ public static class Program
                     await context.Response.WriteAsJsonAsync(new { message = "Utilize uma conexão HTTPS." });
                     return;
                 }
-                // No public collection or queueing while sending is unavailable.
-                if (!local || !(app.Environment.IsDevelopment() || app.Environment.IsEnvironment("HML")))
+                var localAllowed = local && (app.Environment.IsDevelopment() || (sending && app.Environment.IsProduction()));
+                if (!localAllowed && !publicAccess)
                 {
                     context.Response.StatusCode = 503;
                     await context.Response.WriteAsJsonAsync(new { message = "O envio ainda não está disponível." });
@@ -118,7 +149,7 @@ public static class Program
         app.UseCors();
         app.UseRateLimiter();
         app.MapControllers();
-        app.MapGet("/health", () => Results.Ok(new { status = "ok", mode = "simulation" }));
+        app.MapGet("/health", () => Results.Ok(new { status = "ok", mode = sending ? "graph" : "simulation" }));
         return app;
     }
 }

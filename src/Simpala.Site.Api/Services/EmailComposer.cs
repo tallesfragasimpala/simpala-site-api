@@ -7,7 +7,7 @@ public sealed class EmailComposer(DocumentValidator documents)
 {
     public static readonly TimeZoneInfo SaoPaulo = TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo");
 
-    public EmailPreview Compose(string company, string registration, DateTimeOffset created, NormalizedContact contact, bool hml)
+    public EmailPreview Compose(string company, string registration, DateTimeOffset created, NormalizedContact contact)
     {
         var financial = company == "financeira";
         var mailbox = financial ? "faleconosco.financeira@simpala.com.br" : "faleconosco.consorcio@simpala.com.br";
@@ -16,15 +16,12 @@ public sealed class EmailComposer(DocumentValidator documents)
         var phone = contact.Phone;
         var split = phone.Length == 11 ? 7 : 6;
         var formattedPhone = $"({phone[..2]}) {phone[2..split]}-{phone[split..]}";
-        var message = hml && !contact.Message.StartsWith("[TESTE HML]", StringComparison.Ordinal)
-            ? "[TESTE HML] " + contact.Message : contact.Message;
         var body = string.Join("\r\n", new[]
         {
             $"Área de interesse {area} - {date}.", "",
             $"Nº Registro: {registration}", $"Nome: {contact.Name}", $"E-mail: {contact.Email}",
-            $"CPF: {documents.Format(contact.Document)}", $"Telefone: {formattedPhone}", $"Mensagem: {message}",
-            "Aceito receber contato por: ", "Política de Privacidade: "
+            $"CPF: {documents.Format(contact.Document)}", $"Telefone: {formattedPhone}", $"Mensagem: {contact.Message}",
         });
-        return new(mailbox, mailbox, $"Fale Conosco - {registration}", "text/plain", "UTF-8", body);
+        return new(mailbox, mailbox, "Entre em contato", "text/plain", "UTF-8", body);
     }
 }

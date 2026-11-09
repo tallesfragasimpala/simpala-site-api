@@ -1,24 +1,30 @@
-# Publicação no IIS — preparação
+# Publicação no IIS
 
-Esta entrega é de simulação. Publicar os binários não habilita envio nem coleta pública.
+1. Instalar IIS e Hosting Bundle ASP.NET Core .NET 10 atualizado.
+2. Site/aplicação separado do SimDesk, Application Pool dedicado, No Managed Code,
+   um worker; configurar Start Mode AlwaysRunning e preload se desejar aquecimento.
+3. HTTPS válido, DNS e binding do domínio definido pela infraestrutura.
+4. Copiar artifacts/publish para a pasta da aplicação. Não copiar fontes ou App_Data.
+5. Configurar as variáveis listadas no README no ambiente da aplicação/servidor.
+   Credenciais protegidas e fora do pacote; não compartilhar arquivos contendo segredo.
+6. Dados fora da pasta publicada; ACL de escrita somente para a identidade da API.
+   Load User Profile habilitado para DPAPI; planejar troca de identidade e backup.
+7. AllowedHosts e origens HTTPS exatas. Limite IIS de corpo: 16 KiB.
+8. Configurar os sites para o domínio da API, com allowSending:true.
+9. Validar GET /health, carregamento do desafio, POST autorizado de cada empresa,
+   recebimento do e-mail e criação do chamado com documento completo no SimDesk.
 
-- Windows Server 2022 com IIS e Hosting Bundle do ASP.NET Core 10, atualizado.
-- Application Pool dedicado, `No Managed Code`, identidade com permissões mínimas.
-- Ativar `Load User Profile` para a identidade que usa as chaves DPAPI.
-- Site/aplicação separado do SimDesk, com TLS válido e ambiente explicitamente definido.
-- Pasta de dados fora da pasta publicada: acesso de escrita apenas para a identidade da API.
-- Pasta de binários: leitura/execução; não conceder escrita além do necessário.
-- Não armazenar certificados privados, banco, backups e chaves em pastas servidas por HTTP.
-- Configurar `AllowedHosts` com os nomes reais e CORS com origens exatas, se necessário.
-- Definir limite de corpo no Request Filtering do IIS, coerente com os 16 KiB da API.
-- Manter logs de aplicação sem dados pessoais e proteger logs do IIS.
-- Revisar reciclagem, aquecimento e monitoramento antes de adicionar um despachante.
+Produção não roda scripts Start-Local nem Python. IIS gerencia o processo .NET.
+Não registrar corpos, credenciais, tokens ou dados pessoais. Monitorar erros de
+autenticação (HTTP/código Entra sanitizados), disponibilidade e tentativas Unknown.
+Não aceitar X-Forwarded-For arbitrário. Validar o IP e Request.IsHttps na hospedagem;
+proxies adicionais exigem configuração explícita de confiança.
 
-```powershell
-dotnet publish src/Simpala.Site.Api -c Release -o artifacts/publish
-```
+Manter banco e chaves entre publicações; não sobrescrever com dados de teste.
+Backup consistente antes de atualizar; restauração exige reconciliar envios posteriores
+ao backup para não duplicar chamados. Migrações antigas preservam modos HML/Simulation
+somente como histórico, sem reenvio automático; não são ambientes operacionais novos.
 
-O SDK Web gera `web.config` no publish. Não publicar fontes, testes ou `App_Data`.
-Configure ambiente e caminho de dados no servidor, não em credenciais fixas no código.
-Em HML o endpoint de simulação continua limitado a loopback e HTTPS; em Production
-o contato fica indisponível. O transporte Graph e sua homologação são uma etapa posterior.
+Concluir antispam, escopo das caixas, retenção e homologação antes de habilitar
+Contact__EnablePublicAccess. O local valida o mesmo código em Production, mas não
+substitui a validação de HTTPS, permissões e comunicação na infraestrutura final.
