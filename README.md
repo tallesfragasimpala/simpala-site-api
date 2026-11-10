@@ -12,7 +12,8 @@ Na pasta da API:
 powershell -NoProfile -File scripts/Start-Local.ps1
 ```
 
-O script solicita o segredo com entrada oculta, valida autenticação Microsoft sem
+O script solicita a chave da Criptool com entrada oculta quando há segredo criptografado
+configurado (caso contrário, solicita o ClientSecret), valida autenticação Microsoft sem
 enviar e-mails e inicia a API em https://localhost:7099, ambiente Production.
 Enviar o formulário envia e-mail real. O acesso continua restrito ao computador local.
 Credenciais não são gravadas. Variáveis do processo são restauradas ao encerrar.
@@ -25,47 +26,12 @@ python -m http.server 8000 --bind 127.0.0.1 --directory "C:\Users\talles.fraga\p
 ```
 
 Abrir http://127.0.0.1:8000/simpala-financeira/ ou /simpala-consorcios/.
-Os domínios públicos dos sites permanecem sem endereço de API até a configuração com a infra.
 
 Não existe seleção HML/PRD para o envio da API. Se o SimDesk estiver em TestMode,
 o usuário digita [TESTE HML] no início da Mensagem; nenhuma tag é adicionada pela API.
 Os dados antigos de App_Data/HML são preservados e não são enviados ou migrados
 automaticamente. A execução local usa App_Data/Local, separada do diretório definitivo
 que será configurado no servidor. Recibos locais antigos não são reutilizados pelo site.
-
-## Configuração para IIS
-
-```text
-ASPNETCORE_ENVIRONMENT=Production
-EmailSettings__EnableSending=true
-Contact__EnablePublicAccess=true
-Contact__DataDirectory=D:\Simpala\Dados\SiteApi
-Contact__AllowedOrigins__0=https://DOMINIO-REAL-FINANCEIRA
-Contact__AllowedOrigins__1=https://DOMINIO-REAL-CONSORCIOS
-AllowedHosts=DOMINIO-REAL-DA-API
-SupportMail__TenantId=...
-SupportMail__ClientId=...
-SupportMail__ClientSecret=...
-```
-
-O appsettings.json é a única base: envio e acesso externo vêm desabilitados para
-evitar ativação acidental. No IIS, as configurações são provisionadas no servidor.
-O script local habilita envio, limita CORS às origens locais da porta 8000 e mantém
-acesso público bloqueado. Autenticar confirma credenciais, não permissão de envio.
-
-Nos contact-config.js dos sites, configurar a URL HTTPS definitiva e allowSending:true.
-Nunca colocar credenciais Microsoft nos sites. [Instruções de infraestrutura](docs/iis.md).
-
-## Publicar
-
-```powershell
-dotnet publish src/Simpala.Site.Api -c Release -o artifacts/publish
-```
-
-Entregar somente artifacts/publish à infraestrutura. Não entregar código-fonte,
-tests, scripts, App_Data ou credenciais. O SDK Web gera web.config para IIS.
-A publicação usa o mesmo código testado localmente. Mudam endereços, credenciais,
-diretório persistente e liberação de acesso externo.
 
 ## Testes
 
@@ -111,18 +77,12 @@ administrativa e ficam fora da exclusão automática. A janela de idempotência 
 da retenção. Banco/chaves precisam de ACL e backup. A mesma instância SQLite deve
 ser local ao servidor, sem compartilhamento ou múltiplos workers.
 
-Antes de expor ao público: homologar o chamado, autorização Microsoft restrita às
-duas caixas, antispam, retenção/backups e IP/HTTPS no IIS. Soma e honeypot são apenas
-proteções básicas. Nenhum deploy, envio ou mudança no SimDesk é feito pela publicação.
+## Criptografia da credencial
 
-
-## Entrega para infraestrutura
-
-Scripts de configuração e instruções detalhadas em deploy/LEIAME-INFRA.md.
-Gerar pacote com: powershell -NoProfile -File scripts/Build-Delivery.ps1.
-Os domínios oficiais foram confirmados; a origem da API e pastas ainda dependem da infra.
-O pacote gerado mantém o frontend público sem envio até Configure-Websites.ps1 ser executado.
-Configure-Server.ps1 permite informar o segredo no servidor, criptografado por Data Protection
-com DPAPI LocalMachine e ACL. A API aceita SupportMail:ClientSecretFile (caminho absoluto),
-alternativo ao ClientSecret; não configurar as duas fontes simultaneamente.
-Localmente Start-Local.ps1 continua solicitando o segredo em memória, sem alterar o fluxo.
+SupportMail:EncryptedClientSecret contém o resultado Base64 da Criptool;
+SupportMail:EncryptionIV contém seu IV de 16 bytes UTF-8. A chave de 32 bytes UTF-8
+fica somente na variável de ambiente SupportMail__EncryptionKey, fora do JSON e do código.
+O script local solicita a chave por sessão; não a grava. A variável de ambiente não é
+criptografada automaticamente. Não configurar ClientSecret e EncryptedClientSecret juntos.
+Formato compatível: AES-256-CBC, PKCS7, sem derivação da chave. Esse formato legado
+não autentica o conteúdo criptografado. O segredo é descriptografado em memória.

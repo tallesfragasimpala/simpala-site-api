@@ -14,12 +14,6 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
-        if (args.Length == 2 && args[0] == "--configure-mail-secret")
-        {
-            try { Environment.ExitCode = MailSecretFile.ConfigureInteractive(args[1]); }
-            catch { Console.Error.WriteLine("Não foi possível configurar o segredo. Confira o caminho, permissões e se o arquivo já existe."); Environment.ExitCode = 1; }
-            return;
-        }
         await using var app = BuildApp(args);
         await app.RunAsync();
     }
@@ -43,10 +37,11 @@ public static class Program
         builder.Services.AddOptions<SupportMailOptions>().Bind(builder.Configuration.GetSection("SupportMail"))
             .PostConfigure(value =>
             {
-                if (value.ClientSecretFile.Length > 0)
+                if (value.EncryptedClientSecret.Length > 0)
                 {
                     if (value.ClientSecret.Length > 0) throw new InvalidOperationException("Configure somente uma fonte de segredo.");
-                    value.ClientSecret = MailSecretFile.Load(value.ClientSecretFile);
+                    value.ClientSecret = MailSecretProtector.Unprotect(value.EncryptedClientSecret,
+                        Environment.GetEnvironmentVariable("SupportMail__EncryptionKey") ?? "", value.EncryptionIV);
                 }
             })
             .Validate(value => !sending || (Guid.TryParse(value.TenantId, out _) && Guid.TryParse(value.ClientId, out _)

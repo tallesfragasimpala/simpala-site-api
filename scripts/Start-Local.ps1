@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $project = Join-Path $PSScriptRoot '..\src\Simpala.Site.Api'
 $dataPath = [System.IO.Path]::GetFullPath((Join-Path $project 'App_Data\Local'))
 $variables = @{
@@ -7,16 +7,50 @@ $variables = @{
     'Contact__DataDirectory' = $dataPath
 }
 $original = @{}
-foreach ($name in @($variables.Keys) + @('SupportMail__ClientSecret')) {
+foreach ($name in @($variables.Keys) + @('SupportMail__ClientSecret', 'SupportMail__EncryptionKey', 'SupportMail__EncryptedClientSecret')) {
     $original[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
-$secret = Read-Host 'Client secret (entrada oculta; somente nesta sessao)' -AsSecureString
+$settings = Get-Content (Join-Path $project 'appsettings.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$encrypted = $settings.SupportMail.EncryptedClientSecret
+$prompt = if ($encrypted) { 'Chave da Criptool (entrada oculta; somente nesta sessao)' } else { 'Client secret (entrada oculta; somente nesta sessao)' }
+$secret = Read-Host $prompt -AsSecureString
 $pointer = [IntPtr]::Zero
 try {
     if ($secret.Length -eq 0) { throw 'Informe o valor do client secret.' }
     $pointer = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
-    [Environment]::SetEnvironmentVariable('SupportMail__ClientSecret',
-        [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer), 'Process')
+    $inputValue = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+    if ($encrypted) {
+        [Environment]::SetEnvironmentVariable('SupportMail__EncryptionKey', $inputValue, 'Process')
+        [Environment]::SetEnvironmentVariable('SupportMail__ClientSecret', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('SupportMail__EncryptedClientSecret', $encrypted, 'Process')
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $decryptor = $null
+        $plainBytes = $null
+        try {
+            $keyBytes = [Text.Encoding]::UTF8.GetBytes($inputValue)
+            $ivBytes = [Text.Encoding]::UTF8.GetBytes($settings.SupportMail.EncryptionIV)
+            if ($keyBytes.Length -ne 32 -or $ivBytes.Length -ne 16) { throw 'Formato invalido.' }
+            $aes.Key = $keyBytes
+            $aes.IV = $ivBytes
+            $aes.Mode = [Security.Cryptography.CipherMode]::CBC
+            $aes.Padding = [Security.Cryptography.PaddingMode]::PKCS7
+            $decryptor = $aes.CreateDecryptor()
+            $cipherBytes = [Convert]::FromBase64String($encrypted)
+            $plainBytes = $decryptor.TransformFinalBlock($cipherBytes, 0, $cipherBytes.Length)
+            $preflightSecret = [Text.UTF8Encoding]::new($false, $true).GetString($plainBytes)
+        }
+        catch { throw 'Nao foi possivel descriptografar. Confira a chave da Criptool, o IV e o valor configurado.' }
+        finally {
+            if ($plainBytes) { [Array]::Clear($plainBytes, 0, $plainBytes.Length) }
+            if ($keyBytes) { [Array]::Clear($keyBytes, 0, $keyBytes.Length) }
+            if ($decryptor) { $decryptor.Dispose() }
+            $aes.Dispose()
+        }
+    } else {
+        $preflightSecret = $inputValue
+        [Environment]::SetEnvironmentVariable('SupportMail__ClientSecret', $inputValue, 'Process')
+    }
+    $inputValue = $null
     foreach ($name in $variables.Keys) {
         [Environment]::SetEnvironmentVariable($name, $variables[$name], 'Process')
     }
@@ -30,7 +64,7 @@ try {
         grant_type = 'client_credentials'
         scope = 'https://graph.microsoft.com/.default'
         client_id = ([guid]$client).ToString()
-        client_secret = [Environment]::GetEnvironmentVariable('SupportMail__ClientSecret', 'Process')
+        client_secret = $preflightSecret
     }
     $authResult = $null
     try {
@@ -51,6 +85,7 @@ try {
     }
     finally {
         $tokenForm.Clear()
+        $preflightSecret = $null
         $authResult = $null
     }
     Write-Host 'API iniciada em Production para teste local. Enviar o formulario envia um e-mail real.' -ForegroundColor Yellow

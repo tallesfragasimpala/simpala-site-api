@@ -405,35 +405,39 @@ await Test("Edição de Pending invalida claim antigo e não altera tentativa j�
     Check.That(conflict, "Alteração concorrente após Sending é rejeitada");
 });
 
-await Test("Segredo protegido no Windows: leitura, adulteração e opções da API", async () =>
+await Test("Criptool: vetor conhecido e configuração inválida", async () =>
 {
-    if (!OperatingSystem.IsWindows()) return;
-    var directory = Path.Combine(Path.GetTempPath(), "simpala-secret-" + Guid.NewGuid().ToString("N"));
-    var path = Path.Combine(directory, "mail.protected");
+    const string key = "Ybp8od1Q7bUEyj02qj3WEqiJP5KXDnlF";
+    const string iv = "8inqNW7q9sFDVIy9";
+    const string encrypted = "cb/CKyFmKUGzHdPHzb7LgijIDAtVN8wA4gWAdcnpARYuDFetWmhpoMjPmGMTqqg0";
+    Check.Equal("Texto original: segredo-ficticio-teste-123",
+        Simpala.Site.Api.Configuration.MailSecretProtector.Unprotect(encrypted, key, iv));
+    foreach (var invalid in new[] { (encrypted, "short", iv), (encrypted, key, "short"), ("invalid", key, iv), ("", key, iv), (encrypted, new string('é', 32), iv) })
+    {
+        var rejected = false;
+        try { Simpala.Site.Api.Configuration.MailSecretProtector.Unprotect(invalid.Item1, invalid.Item2, invalid.Item3); }
+        catch (InvalidOperationException) { rejected = true; }
+        Check.That(rejected, "Configuração inválida deve ser rejeitada sem expor valores");
+    }
+    var previousKey = Environment.GetEnvironmentVariable("SupportMail__EncryptionKey");
     try
     {
-        Simpala.Site.Api.Configuration.MailSecretFile.Save(path, "test-only-not-a-real-secret");
-        Check.That(!File.ReadAllText(path).Contains("test-only-not-a-real-secret"), "Segredo não está em texto puro");
-        Check.Equal("test-only-not-a-real-secret", Simpala.Site.Api.Configuration.MailSecretFile.Load(path));
+        Environment.SetEnvironmentVariable("SupportMail__EncryptionKey", key);
         var graph = new GraphStub(HttpStatusCode.Accepted);
-        await using (var fixture = await Fixture.Start("Production", builder =>
+        await using var fixture = await Fixture.Start("Production", builder =>
         {
             graph.Configure(builder);
             builder.Configuration.AddInMemoryCollection(new Dictionary<string,string?>
-            { ["SupportMail:ClientSecret"] = "", ["SupportMail:ClientSecretFile"] = path });
-        }))
-        {
-            var payload = Fixture.Payload(await fixture.Challenge());
-            Check.Equal(HttpStatusCode.Accepted, (await fixture.Post(payload)).StatusCode);
-            Check.Equal(1, graph.Sends);
-        }
-        File.WriteAllText(path, "invalid");
-        var rejected = false;
-        try { Simpala.Site.Api.Configuration.MailSecretFile.Load(path); }
-        catch (InvalidOperationException) { rejected = true; }
-        Check.That(rejected, "Arquivo adulterado não é aceito");
+            {
+                ["SupportMail:ClientSecret"] = "",
+                ["SupportMail:EncryptedClientSecret"] = encrypted,
+                ["SupportMail:EncryptionIV"] = iv
+            });
+        });
+        Check.Equal(HttpStatusCode.Accepted, (await fixture.Post(Fixture.Payload(await fixture.Challenge()))).StatusCode);
+        Check.Equal(1, graph.Sends);
     }
-    finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    finally { Environment.SetEnvironmentVariable("SupportMail__EncryptionKey", previousKey); }
 });
 
 Console.WriteLine($"{passed} grupos de testes aprovados. Nenhum e-mail foi enviado.");
@@ -483,6 +487,8 @@ sealed class Fixture(WebApplication app, HttpClient client, string dataDirectory
             builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Contact:DataDirectory"] = data,
+                ["SupportMail:EncryptedClientSecret"] = "",
+                ["SupportMail:EncryptionIV"] = "",
                 ["EmailSettings:EnableSending"] = "false",
                 ["Contact:EnablePublicAccess"] = "false"
             });

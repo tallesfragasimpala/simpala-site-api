@@ -10,5 +10,6 @@ public sealed class SupportMailOptions
     public string TenantId { get; set; } = "";
     public string ClientId { get; set; } = "";
     public string ClientSecret { get; set; } = "";
-    public string ClientSecretFile { get; set; } = "";
+    public string EncryptionIV { get; set; } = "";
+    public string EncryptedClientSecret { get; set; } = "";
 }
